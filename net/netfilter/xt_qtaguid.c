@@ -1469,6 +1469,8 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 		 *  - No {0, uid_tag} stats and no {acc_tag, uid_tag} stats.
 		 */
 		new_tag_stat = create_if_tag_stat(iface_entry, uid_tag);
+		if (!new_tag_stat)
+			goto unlock;
 		uid_tag_counters = &new_tag_stat->counters;
 	} else {
 		uid_tag_counters = &tag_stat_entry->counters;
@@ -1477,6 +1479,8 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 	if (acct_tag) {
 		/* Create the child {acct_tag, uid_tag} and hook up parent. */
 		new_tag_stat = create_if_tag_stat(iface_entry, tag);
+		if (!new_tag_stat)
+			goto unlock;
 		new_tag_stat->parent_counters = uid_tag_counters;
 	} else {
 		/*
@@ -1490,6 +1494,7 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 		BUG_ON(!new_tag_stat);
 	}
 	tag_stat_update(new_tag_stat, direction, proto, bytes);
+unlock:
 	spin_unlock_bh(&iface_entry->tag_stat_list_lock);
 }
 
@@ -1978,7 +1983,7 @@ static int qtaguid_ctrl_proc_read(char *page, char **num_items_returned,
 		f_count = atomic_long_read(
 			&sock_tag_entry->socket->file->f_count);
 		len = snprintf(outp, char_count,
-			       "sock=%p tag=0x%llx (uid=%u) pid=%u "
+			       "sock=%pK tag=0x%llx (uid=%u) pid=%u "
 			       "f_count=%lu\n",
 			       sock_tag_entry->sk,
 			       sock_tag_entry->tag, uid,
@@ -2597,8 +2602,7 @@ static int pp_stats_line(struct proc_print_info *ppi, int cnt_set)
 		tag_t tag = ppi->ts_entry->tn.tag;
 		uid_t stat_uid = get_uid_from_tag(tag);
 		/* Detailed tags are not available to everybody */
-		if (get_atag_from_tag(tag)
-		    && !can_read_other_uid_stats(stat_uid)) {
+		if (!can_read_other_uid_stats(stat_uid)) {
 			CT_DEBUG("qtaguid: stats line: "
 				 "%s 0x%llx %u: insufficient priv "
 				 "from pid=%u tgid=%u uid=%u\n",
@@ -2760,7 +2764,7 @@ static int qtudev_open(struct inode *inode, struct file *file)
 	utd_entry = get_uid_data(current_fsuid(), &utd_entry_found);
 	if (IS_ERR_OR_NULL(utd_entry)) {
 		res = PTR_ERR(utd_entry);
-		goto err;
+		goto err_unlock;
 	}
 
 	/* Look for existing PID based proc_data */
@@ -2802,8 +2806,8 @@ err_unlock_free_utd:
 		rb_erase(&utd_entry->node, &uid_tag_data_tree);
 		kfree(utd_entry);
 	}
+err_unlock:
 	spin_unlock_bh(&uid_tag_data_tree_lock);
-err:
 	return res;
 }
 
